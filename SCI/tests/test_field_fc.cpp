@@ -25,13 +25,13 @@ using namespace seal;
 using namespace sci;
 
 int party = 0;
-int bitlength = 32;
+int bitlength = 37;
 int num_threads = 4;
 int port = 8000;
 string address = "127.0.0.1";
-int num_rows = 1001;
+int num_rows = 512;
 int common_dim = 512;
-int filter_precision = 15;
+int filter_precision = 12;
 
 void MatMul(FCField &he_fc, int32_t num_rows, int32_t common_dim) {
   int num_cols = 1;
@@ -45,20 +45,24 @@ void MatMul(FCField &he_fc, int32_t num_rows, int32_t common_dim) {
     if (party == ALICE) {
       prg.random_data(A[i].data(), common_dim * sizeof(uint64_t));
       for (int j = 0; j < common_dim; j++) {
-        A[i][j] = ((int64_t)A[i][j]) >> (64 - filter_precision);
+        A[i][j] = (1<<12); //((int64_t)A[i][j]) >> (64 - filter_precision);
       }
     }
   }
   for (int i = 0; i < common_dim; i++) {
     B[i].resize(1);
     prg.random_mod_p<uint64_t>(B[i].data(), num_cols, prime_mod);
+    B[i][0] = (1<<12);
   }
   INIT_TIMER;
   START_TIMER;
   he_fc.matrix_multiplication(num_rows, common_dim, num_cols, A, B, C, true,
-                              true);
+                              false);
+  for(int i=0; i<common_dim; i++)cout<<A[0][i]<<" ";cout<<endl;
+  for(int i=0; i<common_dim; i++) cout<<B[i][0]<<" ";cout<<endl;
   STOP_TIMER("Total Time for FC");
 }
+
 
 int main(int argc, char **argv) {
   ArgMapping amap;
@@ -83,9 +87,9 @@ int main(int argc, char **argv) {
   NetIO *io = new NetIO(party == 1 ? nullptr : address.c_str(), port);
 
   FCField he_fc(party, io);
-
+  cout<<io->counter<<endl;
   MatMul(he_fc, num_rows, common_dim);
-
+  cout<<io->counter<<endl;
   io->flush();
   return 0;
 }

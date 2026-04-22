@@ -24,7 +24,11 @@ Modified by Deevashwer Rathee
 */
 
 #include "LinearHE/fc-field.h"
-
+#ifdef HE_DEBUG
+#undef HE_DEBUG
+#endif 
+#define RELINEAR 0
+#define ENC_MUL 0
 using namespace std;
 using namespace seal;
 using namespace sci;
@@ -46,6 +50,47 @@ Ciphertext preprocess_vec(const uint64_t *input, const FCMetadata &data,
   batch_encoder.encode(pod_matrix, tmp);
   encryptor.encrypt(tmp, ciphertext);
   return ciphertext;
+}
+vector<Ciphertext> encrypt_matrix(uint64_t *const *matrix,const FCMetadata &data,
+                          Encryptor &encryptor, BatchEncoder &batch_encoder) {
+  vector<vector<uint64_t>> mat_pack(data.inp_ct,
+                                    vector<uint64_t>(data.slot_count, 0ULL));
+  for (int row = 0; row < data.filter_h; row++) {
+    int ct_idx = row / data.inp_ct;
+    for (int col = 0; col < data.filter_w; col++) {
+      mat_pack[row % data.inp_ct][col + next_pow2(data.filter_w) * ct_idx] =
+          matrix[row][col];
+    }
+  }
+
+  // Take the packed ciphertexts above and repack them in a diagonal ordering.
+  int mod_mask = (data.inp_ct - 1);
+  int wrap_thresh = min(data.slot_count >> 1, next_pow2(data.filter_w));
+  int wrap_mask = wrap_thresh - 1;
+  vector<vector<uint64_t>> mat_diag(data.inp_ct,
+                                    vector<uint64_t>(data.slot_count, 0ULL));
+  for (int ct = 0; ct < data.inp_ct; ct++) {
+    for (int col = 0; col < data.slot_count; col++) {
+      int ct_diag_l = (col - ct) & wrap_mask & mod_mask;
+      int ct_diag_h = (col ^ ct) & (data.slot_count / 2) & mod_mask;
+      int ct_diag = (ct_diag_h + ct_diag_l);
+
+      int col_diag_l = (col - ct_diag_l) & wrap_mask;
+      int col_diag_h = wrap_thresh * (col / wrap_thresh) ^ ct_diag_h;
+      int col_diag = col_diag_h + col_diag_l;
+
+      mat_diag[ct_diag][col_diag] = mat_pack[ct][col];
+    }
+  }
+
+  vector<Plaintext> enc_mat(data.inp_ct);
+    vector<Ciphertext> encrypt_mat(data.inp_ct);
+  for (int ct = 0; ct < data.inp_ct; ct++) {
+    batch_encoder.encode(mat_diag[ct], enc_mat[ct]);
+    encryptor.encrypt(enc_mat[ct], encrypt_mat[ct]);
+  }
+
+  return encrypt_mat;
 }
 
 vector<Plaintext> preprocess_matrix(const uint64_t *const *matrix,
@@ -116,16 +161,24 @@ Ciphertext fc_preprocess_noise(const uint64_t *secret_share,
   return enc_noise;
 }
 
-Ciphertext fc_online(Ciphertext &ct, vector<Plaintext> &enc_mat,
+Ciphertext fc_online(seal::Ciphertext &ct, seal::Plaintext &pt,
+                    std::vector<seal::Plaintext> &enc_mat,std::vector<seal::Ciphertext> &ct_mat,
                      const FCMetadata &data, Evaluator &evaluator,
-                     GaloisKeys &gal_keys, Ciphertext &zero,
+                     GaloisKeys &gal_keys, Ciphertext &zero, RelinKeys &relin_keys,
                      Ciphertext &enc_noise) {
   Ciphertext result = zero;
   // For each matrix ciphertext, rotate the input vector once and multiply + add
   Ciphertext tmp;
+  // evaluator.add_plain_inplace(ct, pt);
   for (int ct_idx = 0; ct_idx < data.inp_ct; ct_idx++) {
+    // evaluator.add_plain_inplace(ct_mat[ct_idx], enc_mat[ct_idx]);
     if (!enc_mat[ct_idx].is_zero()) {
       evaluator.rotate_rows(ct, ct_idx, gal_keys, tmp);
+      // Ciphertext tmp2;
+      // evaluator.multiply(tmp, ct_mat[ct_idx], tmp2);
+      // evaluator.relinearize_inplace(tmp2, relin_keys);
+      // evaluator.add_inplace(result, tmp2);
+
       evaluator.multiply_plain_inplace(tmp, enc_mat[ct_idx]);
       evaluator.add_inplace(result, tmp);
     }
@@ -169,7 +222,7 @@ FCField::FCField(int party, NetIO *io) {
   this->io = io;
   this->slot_count = POLY_MOD_DEGREE;
   generate_new_keys(party, io, slot_count, context, encryptor, decryptor,
-                    evaluator, encoder, gal_keys, zero);
+                    evaluator, encoder, gal_keys, zero, relin_keys);
 }
 
 FCField::~FCField() {
@@ -219,7 +272,7 @@ void FCField::matrix_multiplication(int32_t num_rows, int32_t common_dim,
   Decryptor *decryptor_;
   Evaluator *evaluator_;
   BatchEncoder *encoder_;
-  GaloisKeys *gal_keys_;
+  GaloisKeys *gal_keys_;  RelinKeys *relin_keys;
   Ciphertext *zero_;
   if (slot_count > POLY_MOD_DEGREE) {
     generate_new_keys(party, io, slot_count, context_, encryptor_, decryptor_,
@@ -231,7 +284,7 @@ void FCField::matrix_multiplication(int32_t num_rows, int32_t common_dim,
     evaluator_ = this->evaluator;
     encoder_ = this->encoder;
     gal_keys_ = this->gal_keys;
-    zero_ = this->zero;
+    zero_ = this->zero;relin_keys = this->relin_keys;
   }
 
   if (party == BOB) {
@@ -242,11 +295,37 @@ void FCField::matrix_multiplication(int32_t num_rows, int32_t common_dim,
     if (verbose)
       cout << "[Client] Vector Generated" << endl;
 
+#if ENC_MUL
+    vector<uint64_t *> matrix_mod_p(num_rows);
+    vector<uint64_t *> matrix(num_rows);
+    for (int i = 0; i < num_rows; i++) {
+      matrix_mod_p[i] = new uint64_t[common_dim];
+      matrix[i] = new uint64_t[common_dim];
+      for (int j = 0; j < common_dim; j++) {
+        matrix_mod_p[i][j] = neg_mod((int64_t)A[i][j], (int64_t)prime_mod);
+        int64_t val = (int64_t)A[i][j];
+        if (val > int64_t(prime_mod/2)) {
+          val = val - prime_mod;
+        }
+        matrix[i][j] = val;
+      }
+    }
+    if (verbose)
+      cout << "[Client] Matrix generated" << endl;
+#endif    
     auto ct = preprocess_vec(vec.data(), data, *encryptor_, *encoder_);
     send_ciphertext(io, ct);
+    cout<<io->counter<<endl;
     if (verbose)
       cout << "[Client] Vector processed and sent" << endl;
 
+#if ENC_MUL
+    auto ct_mat = encrypt_matrix(matrix_mod_p.data(), data, *encryptor_, *encoder_);
+    send_encrypted_vector(io, ct_mat);
+      cout<<io->counter<<endl;
+    if (verbose)
+      cout << "[Client] Mat processed and sent" << endl;
+#endif
     Ciphertext enc_result;
     recv_ciphertext(io, enc_result);
     auto HE_result = fc_postprocess(enc_result, data, *encoder_, *decryptor_);
@@ -266,6 +345,16 @@ void FCField::matrix_multiplication(int32_t num_rows, int32_t common_dim,
     for (int i = 0; i < common_dim; i++) {
       vec[i] = B[i][0];
     }
+    //------------from preprocess_vec-------------------------//
+    vector<uint64_t> pod_vec(data.slot_count, 0ULL);
+    uint64_t size_pow2 = next_pow2(data.image_size);
+    for (int col = 0; col < data.image_size; col++) {
+      for (int idx = 0; idx < data.pack_num; idx++) {
+        pod_vec[col + size_pow2 * idx] = vec[col];
+      }
+    }
+     Plaintext pt_vec;
+    encoder_->encode(pod_vec, pt_vec);
     if (verbose)
       cout << "[Server] Vector Generated" << endl;
     vector<uint64_t *> matrix_mod_p(num_rows);
@@ -301,9 +390,13 @@ void FCField::matrix_multiplication(int32_t num_rows, int32_t common_dim,
 #ifdef HE_DEBUG
     PRINT_NOISE_BUDGET(decryptor_, ct, "before FC Online");
 #endif
-
-    auto HE_result = fc_online(ct, encoded_mat, data, *evaluator_, *gal_keys_,
-                               *zero_, enc_noise);
+    vector<Ciphertext> ct_mat;
+#if ENC_MUL
+    ct_mat.resize(data.inp_ct);
+    recv_encrypted_vector(io, ct_mat);
+#endif
+    auto HE_result = fc_online(ct, pt_vec, encoded_mat, ct_mat, data, *evaluator_, *gal_keys_,
+                               *zero_, *relin_keys, enc_noise);
 
 #ifdef HE_DEBUG
     PRINT_NOISE_BUDGET(decryptor_, HE_result, "after FC Online");

@@ -47,16 +47,17 @@ seal::Ciphertext preprocess_vec(const uint64_t *input, const FCMetadata &data,
 std::vector<seal::Plaintext>
 preprocess_matrix(const uint64_t *const *matrix, const FCMetadata &data,
                   seal::BatchEncoder &batch_encoder);
-
+std::vector<seal::Ciphertext> encrypt_matrix(uint64_t *const *matrix, const FCMetadata &data,
+                          seal::Encryptor &encryptor, seal::BatchEncoder &batch_encoder);
 seal::Ciphertext fc_preprocess_noise(const uint64_t *secret_share,
                                      const FCMetadata &data,
                                      seal::Encryptor &encryptor,
                                      seal::BatchEncoder &batch_encoder);
 
-seal::Ciphertext fc_online(seal::Ciphertext &ct,
-                           std::vector<seal::Plaintext> &enc_mat,
+seal::Ciphertext fc_online(seal::Ciphertext &ct, seal::Plaintext &pt,
+                           std::vector<seal::Plaintext> &enc_mat,std::vector<seal::Ciphertext> &ct_mat,
                            const FCMetadata &data, seal::Evaluator &evaluator,
-                           seal::GaloisKeys &gal_keys, seal::Ciphertext &zero,
+                           seal::GaloisKeys &gal_keys, seal::Ciphertext &zero, seal::RelinKeys &relin_keys,
                            seal::Ciphertext &enc_noise);
 
 uint64_t *fc_postprocess(seal::Ciphertext &result, const FCMetadata &data,
@@ -73,7 +74,7 @@ public:
   seal::Decryptor *decryptor;
   seal::Evaluator *evaluator;
   seal::BatchEncoder *encoder;
-  seal::GaloisKeys *gal_keys;
+  seal::GaloisKeys *gal_keys;  seal::RelinKeys *relin_keys;
   seal::Ciphertext *zero;
   size_t slot_count;
 

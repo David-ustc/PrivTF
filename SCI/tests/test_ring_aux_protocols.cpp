@@ -22,15 +22,16 @@ SOFTWARE.
 #include "BuildingBlocks/aux-protocols.h"
 #include "utils/emp-tool.h"
 #include <iostream>
+#include "BuildingBlocks/truncation.h"
 using namespace sci;
 using namespace std;
 
-int party, port = 8000, dim = 35;
+int party, port = 8000, dim = 4736;
 string address = "127.0.0.1";
 IOPack *iopack;
 OTPack *otpack;
 AuxProtocols *aux;
-
+Truncation *trunc_oracle;
 void test_wrap_computation() {
   int bw_x = 32;
   PRG128 prg;
@@ -84,7 +85,14 @@ void test_mux() {
     x[i] = x[i] & mask_x;
   }
 
+  uint64_t total_comm = iopack->get_comm();
+  uint64_t total_round = iopack->get_rounds();
+  cout << "MUX Bytes Sent\t" << total_comm << " bytes" << endl;
+  cout << "Rounds\t" << total_round << endl;
+  auto start = clock_start();
   aux->multiplexer(sel, x, y, dim, bw_x, bw_y);
+  long long t = time_from(start);
+  total_comm = (iopack->get_comm() - total_comm);
 
   if (party == ALICE) {
     iopack->io->send_data(sel, dim * sizeof(uint8_t));
@@ -103,6 +111,10 @@ void test_mux() {
              ((y0[i] + y[i]) & mask_y));
     }
     cout << "MUX Tests passed" << endl;
+    cout << "MUX Time\t" << t / (1000.0) << " ms" << endl;
+    total_round = iopack->get_rounds() - total_round;
+    cout << "MSB Bytes Sent\t" << total_comm << " bytes" << endl;
+    cout << "Rounds\t" << total_round << endl;
 
     delete[] sel0;
     delete[] x0;
@@ -125,9 +137,12 @@ void test_B2A() {
   for (int i = 0; i < dim; i++) {
     x[i] = x[i] & 1;
   }
-
+  int comm = iopack->get_comm();
+  auto start = clock_start();
   aux->B2A(x, y, dim, bw_y);
-
+  comm += iopack->get_comm();
+  long long t = time_from(start);
+  cout<<t<<" "<<comm<<endl;
   if (party == ALICE) {
     iopack->io->send_data(x, dim * sizeof(uint8_t));
     iopack->io->send_data(y, dim * sizeof(uint64_t));
@@ -138,6 +153,7 @@ void test_B2A() {
     iopack->io->recv_data(y0, dim * sizeof(uint64_t));
 
     for (int i = 0; i < dim; i++) {
+      //cout<<(uint64_t(x0[i] ^ x[i]))<<" "<<y[i]<<" "<<y0[i]<<endl;
       assert(((uint64_t(x0[i] ^ x[i])) & mask_y) == ((y0[i] + y[i]) & mask_y));
     }
     cout << "B2A Tests passed" << endl;
@@ -177,13 +193,16 @@ template <typename T> void test_lookup_table() {
       spec[i][j] = spec[i][j] & mask_y;
     }
   }
-
+  cout<<iopack->io->counter<<endl;
+  INIT_TIMER;
+  START_TIMER;
   if (party == ALICE) {
     aux->lookup_table<T>(spec, nullptr, nullptr, dim, bw_x, bw_y);
   } else { // party == BOB
     aux->lookup_table<T>(nullptr, x, y, dim, bw_x, bw_y);
   }
-
+  cout<<iopack->io->counter<<endl;
+  STOP_TIMER("Total Time for FC");
   if (party == BOB) {
     iopack->io->send_data(x, dim * sizeof(T));
     iopack->io->send_data(y, dim * sizeof(T));
@@ -212,7 +231,7 @@ template <typename T> void test_lookup_table() {
 }
 
 void test_MSB_computation() {
-  int bw_x = 32;
+  int bw_x = 16;
   PRG128 prg;
   uint64_t mask_x = (bw_x == 64 ? -1 : ((1ULL << bw_x) - 1));
 
@@ -224,7 +243,15 @@ void test_MSB_computation() {
     x[i] = x[i] & mask_x;
   }
 
+  uint64_t total_comm = iopack->get_comm();
+  uint64_t total_round = iopack->get_rounds();
+  cout << "MSB Bytes Sent\t" << total_comm << " bytes" << endl;
+  cout << "Rounds\t" << total_round << endl;
+  auto start = clock_start();
   aux->MSB(x, y, dim, bw_x);
+  long long t = time_from(start);
+  total_comm = (iopack->get_comm() - total_comm);
+  
 
   if (party == ALICE) {
     iopack->io->send_data(x, dim * sizeof(uint64_t));
@@ -240,10 +267,14 @@ void test_MSB_computation() {
              (y0[i] ^ y[i]));
     }
     cout << "MSB Computation Tests passed" << endl;
+    cout << "MSB Time\t" << t / (1000.0) << " ms" << endl;
 
     delete[] x0;
     delete[] y0;
   }
+  total_round = iopack->get_rounds() - total_round;
+  cout << "MSB Bytes Sent\t" << total_comm << " bytes" << endl;
+  cout << "Rounds\t" << total_round << endl;  
   delete[] x;
   delete[] y;
 }
@@ -455,6 +486,37 @@ void test_msnzb_one_hot() {
   delete[] y;
 }
 
+void test_eq(){
+    int bw_x = 16;
+  PRG128 prg;
+  uint64_t mask_x = (bw_x == 64 ? -1 : ((1ULL << bw_x) - 1));
+
+  uint64_t *x = new uint64_t[dim];
+  uint8_t *y = new uint8_t[dim];
+
+  prg.random_data(x, dim * sizeof(uint64_t));
+  for (int i = 0; i < dim; i++) {
+    x[i] = x[i] & mask_x;
+  }
+
+  uint64_t total_comm = iopack->io->counter;
+  uint64_t total_round = iopack->io->num_rounds;
+  cout << "Pre Bytes Sent\t" << total_comm << " bytes" << endl;
+  cout << "Rounds\t" << total_round << endl;
+  auto start = clock_start();
+  trunc_oracle->eq->check_equality(y, x, dim, bw_x, 4);
+
+  total_comm = iopack->io->counter - total_comm;
+  total_round = iopack->io->num_rounds - total_round;
+  long long t = time_from(start);
+  cout << "Equality Check Tests passed" << endl;
+  cout << "Equality Check Time\t" << t / (1000.0) << " ms" << endl;
+
+  cout << "Equality Check Bytes Sent\t" << total_comm << " bytes" << endl;
+  cout << "Rounds\t" << total_round << endl;
+  delete[] x;
+  delete[] y;
+}
 int main(int argc, char **argv) {
   ArgMapping amap;
   amap.arg("r", party, "Role of party: ALICE = 1; BOB = 2");
@@ -466,19 +528,20 @@ int main(int argc, char **argv) {
   iopack = new IOPack(party, port, "127.0.0.1");
   otpack = new OTPack(iopack, party);
   uint64_t num_rounds;
+  trunc_oracle = new Truncation(party, iopack, otpack);
 
   aux = new AuxProtocols(party, iopack, otpack);
 
-  test_MSB_computation();
-  test_wrap_computation();
-  test_mux();
-  test_B2A();
-  test_lookup_table<uint8_t>();
-  test_lookup_table<uint64_t>();
-  test_MSB_to_Wrap();
-  test_AND();
-  test_digit_decomposition();
-  test_msnzb_one_hot();
-
+test_MSB_computation();
+  // test_wrap_computation();
+  // test_mux();
+  // test_B2A();
+  // test_lookup_table<uint8_t>();
+  // test_lookup_table<uint64_t>();
+  // test_MSB_to_Wrap();
+  // test_AND();
+  // test_digit_decomposition();
+  // test_msnzb_one_hot();
+test_eq();
   return 0;
 }

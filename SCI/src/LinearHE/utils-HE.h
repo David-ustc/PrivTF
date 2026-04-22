@@ -38,6 +38,14 @@ void generate_new_keys(int party, sci::NetIO *io, int slot_count,
                        seal::Decryptor *&decryptor_,
                        seal::Evaluator *&evaluator_,
                        seal::BatchEncoder *&encoder_,
+                       seal::GaloisKeys *&gal_keys_, seal::Ciphertext *&zero_,seal::RelinKeys *&relin_keys,
+                       bool verbose = false);
+void generate_new_keys(int party, sci::NetIO *io, int slot_count,
+                       std::shared_ptr<seal::SEALContext> &context_,
+                       seal::Encryptor *&encryptor_,
+                       seal::Decryptor *&decryptor_,
+                       seal::Evaluator *&evaluator_,
+                       seal::BatchEncoder *&encoder_,
                        seal::GaloisKeys *&gal_keys_, seal::Ciphertext *&zero_,
                        bool verbose = false);
 

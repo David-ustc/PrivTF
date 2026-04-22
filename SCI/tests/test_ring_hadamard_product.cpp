@@ -11,7 +11,7 @@ IOPack *iopack;
 OTPack *otpack;
 LinearOT *prod;
 
-int dim = 1 << 16;
+int dim = 512;
 int bwA = 32;
 int bwB = 32;
 int bwC = 32;
@@ -23,9 +23,10 @@ uint64_t maskC = (bwC == 64 ? -1 : ((1ULL << bwC) - 1));
 void test_hadamard_product(uint64_t *inA, uint64_t *inB,
                            bool signed_arithmetic = true) {
   uint64_t *outC = new uint64_t[dim];
-
+  auto start = clock_start();
   prod->hadamard_product(dim, inA, inB, outC, bwA, bwB, bwC, signed_arithmetic);
-
+  long long t = time_from(start);
+  cout << "mul Time\t" << t / (1000.0) << " ms" << endl;
   if (party == ALICE) {
     iopack->io->send_data(inA, dim * sizeof(uint64_t));
     iopack->io->send_data(inB, dim * sizeof(uint64_t));
@@ -40,6 +41,7 @@ void test_hadamard_product(uint64_t *inA, uint64_t *inB,
 
     for (int i = 0; i < dim; i++) {
       if (signed_arithmetic) {
+        //cout<<signed_val(outC[i] + outC0[i], bwC)<<" "<<signed_val(inA[i] + inA0[i], bwA)<< " "<<signed_val(inB[i] + inB0[i], bwB)<<endl;
         assert(signed_val(outC[i] + outC0[i], bwC) ==
                (signed_val(signed_val(inA[i] + inA0[i], bwA) *
                                signed_val(inB[i] + inB0[i], bwB),
@@ -84,14 +86,29 @@ int main(int argc, char **argv) {
 
   prg.random_data(inA, dim * sizeof(uint64_t));
   prg.random_data(inB, dim * sizeof(uint64_t));
-
+  //x is always positive
+  if (party == sci::ALICE) {
+    iopack->io->send_data(inA, dim * sizeof(uint64_t));
+  } else {
+    uint64_t *x0 = new uint64_t[dim];
+    iopack->io->recv_data(x0, dim * sizeof(uint64_t));
+    for (int i = 0; i < dim; i++) {
+      inA[i] &= (maskA >> 24);
+      // dn is always of the form 1.xxxx
+      inA[i] = (inA[i] - x0[i]);
+    }
+    delete[] x0;
+  }
+  for (int i = 0; i < dim; i++) {
+    inA[i] &= maskA;
+  }
   for (int i = 0; i < dim; i++) {
     inA[i] &= maskA;
     inB[i] &= maskB;
   }
 
   test_hadamard_product(inA, inB, false);
-  test_hadamard_product(inA, inB, true);
+  test_hadamard_product(inA, inA, true);
 
   delete[] inA;
   delete[] inB;

@@ -21,11 +21,126 @@ SOFTWARE.
 
 #include "LinearHE/utils-HE.h"
 #include "seal/util/polyarithsmallmod.h"
-
+#define RELIN
+#undef RELIN
 using namespace std;
 using namespace sci;
 using namespace seal;
 using namespace seal::util;
+
+void generate_new_keys(int party, NetIO *io, int slot_count,
+                       shared_ptr<SEALContext> &context_,
+                       Encryptor *&encryptor_, Decryptor *&decryptor_,
+                       Evaluator *&evaluator_, BatchEncoder *&encoder_,
+                       GaloisKeys *&gal_keys_, Ciphertext *&zero_,RelinKeys *&relin_keys,
+                       bool verbose) {
+  EncryptionParameters parms(scheme_type::BFV);
+  parms.set_poly_modulus_degree(slot_count);
+  parms.set_coeff_modulus(CoeffModulus::Create(slot_count, {60, 60, 60, 38}));
+  parms.set_plain_modulus(prime_mod);
+  // auto context = SEALContext::Create(parms, true, sec_level_type::none);
+  context_ = SEALContext::Create(parms, true, sec_level_type::none);
+  encoder_ = new BatchEncoder(context_);
+  evaluator_ = new Evaluator(context_);
+  if (party == BOB) {
+    KeyGenerator keygen(context_);
+    auto pub_key = keygen.public_key();
+    auto sec_key = keygen.secret_key();
+    auto gal_keys_ = keygen.galois_keys();
+
+    stringstream os;
+    pub_key.save(os);
+    uint64_t pk_size = os.tellp();
+    gal_keys_.save(os);
+    uint64_t gk_size = (uint64_t)os.tellp() - pk_size;
+
+#ifdef RELIN
+      auto relin_keys_ = keygen.relin_keys();
+      relin_keys_.save(os);
+      uint64_t rk_size = (uint64_t)os.tellp() - pk_size - gk_size;
+      string keys_ser = os.str();
+      io->send_data(&pk_size, sizeof(uint64_t));
+      io->send_data(&gk_size, sizeof(uint64_t));
+      io->send_data(&rk_size, sizeof(uint64_t));
+      io->send_data(keys_ser.c_str(), pk_size + gk_size+rk_size);
+#else
+    string keys_ser = os.str();
+    io->send_data(&pk_size, sizeof(uint64_t));
+    io->send_data(&gk_size, sizeof(uint64_t));
+    io->send_data(keys_ser.c_str(), pk_size + gk_size);
+#endif
+
+#ifdef HE_DEBUG
+    stringstream os_sk;
+    sec_key.save(os_sk);
+    uint64_t sk_size = os_sk.tellp();
+    string keys_ser_sk = os_sk.str();
+    io->send_data(&sk_size, sizeof(uint64_t));
+    io->send_data(keys_ser_sk.c_str(), sk_size);
+#endif
+    encryptor_ = new Encryptor(context_, pub_key);
+    decryptor_ = new Decryptor(context_, sec_key);
+  } else // party == ALICE
+  {
+    uint64_t pk_size;
+    uint64_t gk_size;
+    io->recv_data(&pk_size, sizeof(uint64_t));
+    io->recv_data(&gk_size, sizeof(uint64_t));
+
+    PublicKey pub_key;
+#ifdef RELIN
+      uint64_t rk_size;
+      io->recv_data(&rk_size, sizeof(uint64_t));
+      char *key_share = new char[pk_size + gk_size + rk_size];
+      io->recv_data(key_share, pk_size + gk_size + rk_size);
+      stringstream is;
+      
+      is.write(key_share, pk_size);
+      pub_key.load(context_, is);
+
+      gal_keys_ = new GaloisKeys();
+      is.write(key_share + pk_size, gk_size);
+      gal_keys_->load(context_, is);
+
+      relin_keys = new RelinKeys();
+      is.write(key_share + pk_size + gk_size, rk_size);
+      relin_keys->load(context_, is);
+      delete[] key_share;
+#else
+    char *key_share = new char[pk_size + gk_size];
+    io->recv_data(key_share, pk_size + gk_size);
+    stringstream is;
+    //PublicKey pub_key;
+    is.write(key_share, pk_size);
+    pub_key.load(context_, is);
+    gal_keys_ = new GaloisKeys();
+    is.write(key_share + pk_size, gk_size);
+    gal_keys_->load(context_, is);
+    delete[] key_share;
+#endif
+
+#ifdef HE_DEBUG
+    uint64_t sk_size;
+    io->recv_data(&sk_size, sizeof(uint64_t));
+    char *key_share_sk = new char[sk_size];
+    io->recv_data(key_share_sk, sk_size);
+    stringstream is_sk;
+    SecretKey sec_key;
+    is_sk.write(key_share_sk, sk_size);
+    sec_key.load(context_, is_sk);
+    delete[] key_share_sk;
+    decryptor_ = new Decryptor(context_, sec_key);
+#endif
+    encryptor_ = new Encryptor(context_, pub_key);
+    vector<uint64_t> pod_matrix(slot_count, 0ULL);
+    Plaintext tmp;
+    encoder_->encode(pod_matrix, tmp);
+    zero_ = new Ciphertext;
+    encryptor_->encrypt(tmp, *zero_);
+  }
+  if (verbose)
+    cout << "Keys Generated (slot_count: " << slot_count << ")" << endl;
+}
 
 void generate_new_keys(int party, NetIO *io, int slot_count,
                        shared_ptr<SEALContext> &context_,

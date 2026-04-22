@@ -67,6 +67,8 @@ public:
 
   void sigmoid(int32_t dim, uint64_t *x, uint64_t *y, int32_t bw_x,
                int32_t bw_y, int32_t s_x, int32_t s_y);
+  void softmax(int32_t dim, uint64_t *x, uint64_t *y, uint64_t max_x, int32_t bw_x,
+               int32_t bw_y, int32_t s_x, int32_t s_y);
 
   void tanh(int32_t dim, uint64_t *x, uint64_t *y, int32_t bw_x, int32_t bw_y,
             int32_t s_x, int32_t s_y);

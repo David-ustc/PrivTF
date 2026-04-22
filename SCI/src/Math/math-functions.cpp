@@ -514,7 +514,86 @@ void MathFunctions::sigmoid(int32_t dim, uint64_t *x, uint64_t *y, int32_t bw_x,
   delete[] msb_den;
   delete[] sig_neg_x;
 }
+#if 0 // accurate
+void MathFunctions::softmax(int32_t dim, uint64_t *x, uint64_t *y, uint64_t max_x, int32_t bw_x,
+                            int32_t bw_y, int32_t s_x, int32_t s_y) {
+  uint64_t mask_x = (bw_x == 64 ? -1 : ((1ULL << bw_x) - 1));
+  uint64_t mask_y = (bw_y == 64 ? -1 : ((1ULL << bw_y) - 1));
+  uint64_t bw_w=bw_x+6;
+  uint64_t mask_wide = ((bw_w) == 64 ? -1 : ((1ULL << (bw_w)) - 1));
+  uint8_t *zero_shares = new uint8_t[dim];
 
+uint64_t *tmp_1 = new uint64_t[dim];
+uint64_t *tmp_2 = new uint64_t[dim];  
+
+  for (int i = 0; i < dim; i++) {
+    zero_shares[i] = 0;
+    x[i] = (x[i] - max_x)&mask_x;
+  } 
+  uint64_t *exp_neg_x = new uint64_t[dim];
+  lookup_table_exp(dim, x, tmp_2, bw_x, bw_w, s_x, s_y);// exp( neg_x )
+
+  uint64_t sum_exp_x =0;  
+  for (int i = 0; i < dim; i++) {
+    sum_exp_x = ((sum_exp_x + tmp_2[i])&mask_wide);//cout<<sum_exp_x<<endl;
+  }
+
+  uint64_t* denominator = new uint64_t[dim];
+  for (int i = 0; i < dim; i++) denominator[i]=sum_exp_x;
+  div(dim, tmp_2, denominator, tmp_1, s_y+2, bw_w, s_y+2,   s_y, s_y, s_y, false, true);
+
+  if (bw_y <= (s_y + 2)) {
+    for (int i = 0; i < dim; i++)  y[i] = tmp_1[i] & mask_y;
+  } else {
+    xt->z_extend(dim, tmp_1, y, s_y+2, bw_y, zero_shares);
+  }
+
+  delete[] tmp_1;
+  delete[] tmp_2;
+  delete[] exp_neg_x;
+}
+#else // efficient and accurate
+void MathFunctions::softmax(int32_t dim, uint64_t *x, uint64_t *y, uint64_t max_x, int32_t bw_x,
+                            int32_t bw_y, int32_t s_x, int32_t s_y) {
+  uint64_t mask_x = (bw_x == 64 ? -1 : ((1ULL << bw_x) - 1));
+  uint64_t mask_y = (bw_y == 64 ? -1 : ((1ULL << bw_y) - 1));
+  uint64_t bw_w = s_y+2+log2(dim);
+  uint64_t mask_wide = ((bw_w) == 64 ? -1 : ((1ULL << (bw_w)) - 1));
+  //uint8_t *zero_shares = new uint8_t[dim];
+
+uint64_t sum_exp_x[1];
+uint64_t *neg_x = new uint64_t[dim];
+
+  for (int i = 0; i < dim; i++) {
+    //zero_shares[i] = 0;
+    neg_x[i] = (x[i] -  max_x)&mask_x;
+  }
+  uint64_t *exp_neg_x = new uint64_t[dim];
+  lookup_table_exp(dim, neg_x, exp_neg_x, bw_x, bw_w, s_x, s_y);// exp( neg_x )
+
+  sum_exp_x[0]=0;
+  for (int i = 0; i < dim; i++) {
+    *sum_exp_x = ((*sum_exp_x+ exp_neg_x[i])&mask_wide);//cout<<sum_exp_x<<endl;   
+    //x[i] = (exp_neg_x[i]&mask_wide);  //  to reveal and check exp_x, don't use
+  }
+  
+  // if (party == ALICE) {
+  // iopack->io->send_data(sum_exp_x, sizeof(uint64_t));
+  // iopack->io->recv_data(sum_exp_x2, sizeof(uint64_t));
+  // }
+  // else { // party == BOB
+  // iopack->io->recv_data(sum_exp_x2,  sizeof(uint64_t));
+  // iopack->io->send_data(sum_exp_x, sizeof(uint64_t));
+  // }
+
+  uint64_t* denominator = new uint64_t[dim];
+  for (int i = 0; i < dim; i++) denominator[i]=*sum_exp_x;
+  div(dim, exp_neg_x, denominator, y, s_y+2, bw_w, s_y+2, s_y, s_y, s_y, false, true);
+
+  delete[] neg_x;
+  delete[] exp_neg_x;
+}
+#endif
 void MathFunctions::tanh(int32_t dim, uint64_t *x, uint64_t *y, int32_t bw_x,
                          int32_t bw_y, int32_t s_x, int32_t s_y) {
   uint64_t mask_x = (bw_x == 64 ? -1 : ((1ULL << bw_x) - 1));

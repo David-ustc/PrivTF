@@ -25,9 +25,9 @@ SOFTWARE.
 using namespace sci;
 using namespace std;
 
-int dim = 1024;
-int bwA = 32;
-int bwB = 64;
+int dim = 102400;
+int bwA = 20;
+int bwB = 37;
 bool precomputed_MSBs = false;
 
 uint64_t maskA = (bwA == 64 ? -1 : ((1ULL << bwA) - 1));
@@ -58,9 +58,16 @@ void z_ext() {
     ext->aux->MSB(inA, msbA, dim, bwA);
   }
   uint64_t num_rounds = iopack->get_rounds();
+  uint64_t comm_start = iopack->get_comm();
+  INIT_TIMER;
+  START_TIMER;
   ext->z_extend(dim, inA, outB, bwA, bwB, msbA);
   num_rounds = iopack->get_rounds() - num_rounds;
   cout << "Num rounds (Zero-Extension): " << num_rounds << endl;
+  
+  uint64_t comm_end = iopack->get_comm();
+  cout << "Bytes Sent: " << (comm_end - comm_start) << endl;
+  STOP_TIMER("Total time for matmul");
 
   if (party == ALICE) {
     uint64_t *inA_bob = new uint64_t[dim];
