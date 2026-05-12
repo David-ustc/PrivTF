@@ -6,7 +6,7 @@ This repository contains a reference implementation of **PrivTF**, based on the 
 
 ## Setup and Usage
 
-The implementations are based on the EzPC framework. Please refer to the [EzPC repository](https://github.com/mpc-msri/EzPC) for setup instructions and documentation.
+The implementations are based on the EzPC framework. Please refer to the [EzPC repository](https://github.com/mpc-msri/EzPC) for detailed setup instructions and documentation.
 
 ## Usage Statement for Research Purpose
 
